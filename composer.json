@@ -1,0 +1,23 @@
+{
+    "name": "ignite-medical/ci-otp-authenticator",
+    "description": "Managed external dependencies for the ci-otp-authenticator plugin (replaces the hard-copied libraries/ SDK trees).",
+    "require": {
+        "php": ">=8.1",
+        "twilio/sdk": "^6.44",
+        "alibabacloud/sdk": "^1.8",
+        "bandwidth/sdk": "^13.0"
+    },
+    "config": {
+        "platform": {
+            "php": "8.1"
+        }
+    },
+    "extra": {
+        "imt-dependency-notes": {
+            "_status": "ALL WIRED 2026-06-30. twilio, alibabacloud, bandwidth are Composer-managed; the three gateways load vendor/autoload.php and the entire vendored libraries/ tree was deleted.",
+            "twilio/sdk": "WIRED. Replaced vendored libraries/twilio (6.9.2, custom SplClassLoader) with 6.44.x — same Twilio\\Rest\\Client API. class-otpa-twilio-gateway.php loads vendor/autoload.php. (v8 is a BREAKING major; stayed on v6.)",
+            "alibabacloud/sdk": "WIRED. Replaced vendored libraries/alibaba with alibabacloud/sdk ^1.8 (same AlibabaCloud\\Client API). class-otpa-alibaba-cloud-sms-gateway.php loads vendor/autoload.php.",
+            "bandwidth/sdk": "WIRED. Replaced vendored libraries/bandwidth (2.14) with v13. v13 keeps the same BandwidthLib API (Configuration/BandwidthClient/Messaging, incl. getMessages), so class-otpa-bandwidth-sms-gateway.php just loads vendor/autoload.php — no API rewrite. Note: v13 still bundles unirest; managed version bump, not an escape from that transitive dep."
+        }
+    }
+}
