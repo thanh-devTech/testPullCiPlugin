@@ -1,0 +1,25 @@
+name: OTP SQL safety
+
+on:
+  pull_request:
+    paths:
+      - 'inc/gateways/**'
+      - 'inc/class-otpa-logger.php'
+      - 'inc/templates/admin/logs-settings-page.php'
+      - 'tests/otp-sql-safety.php'
+  push:
+    paths:
+      - 'inc/gateways/**'
+      - 'inc/class-otpa-logger.php'
+      - 'inc/templates/admin/logs-settings-page.php'
+      - 'tests/otp-sql-safety.php'
+
+jobs:
+  sql-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+      - run: php tests/otp-sql-safety.php

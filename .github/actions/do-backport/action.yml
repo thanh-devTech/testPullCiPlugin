@@ -1,0 +1,203 @@
+name: "Backport commits to mainphp7"
+description: "Cherry-picks a set of commits onto mainphp7, opens (or reuses) a PR, and reports back the result."
+
+inputs:
+  token:
+    required: true
+  shas:
+    description: "Space separated list of commit SHAs to cherry-pick"
+    required: true
+  source_ref:
+    description: 'Human readable description of what triggered this run (e.g. "PR #123" or "commit(s) pushed to main")'
+    required: true
+  pr_title:
+    required: true
+  pr_number:
+    description: "Original PR number. Empty string when triggered by a direct push."
+    required: false
+    default: ""
+  branch_slug:
+    description: "Unique slug used to build the backport branch name"
+    required: true
+
+outputs:
+  pr_url:
+    value: ${{ steps.create_pr.outputs.pr_url }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Config git
+      shell: bash
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Create backport branch from mainphp7
+      id: branch
+      shell: bash
+      run: |
+        BRANCH="backport/${{ inputs.branch_slug }}-to-mainphp7"
+        git fetch origin mainphp7
+        git checkout -b "$BRANCH" origin/mainphp7
+        echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+    - name: Cherry-pick commits
+      id: cherrypick
+      shell: bash
+      run: |
+        set +e
+        FAILED=""
+        for sha in ${{ inputs.shas }}; do
+          echo "Cherry-picking $sha"
+          git cherry-pick "$sha"
+          if [ $? -ne 0 ]; then
+            echo "Conflict on $sha, committing with conflict markers left in place for manual resolution"
+            git add -A
+            GIT_EDITOR=true git cherry-pick --continue
+            FAILED="$FAILED $sha"
+          fi
+        done
+        echo "failed_shas=$FAILED" >> "$GITHUB_OUTPUT"
+        if [ -n "$FAILED" ]; then
+          echo "has_conflicts=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_conflicts=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Find files with unresolved conflict markers
+      id: conflictfiles
+      shell: bash
+      run: |
+        FILES=$(grep -rl "^<<<<<<<" --exclude-dir=.git . || true)
+        if [ -n "$FILES" ]; then
+          {
+            echo "files<<EOF"
+            echo "$FILES"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+        else
+          echo "files=" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Check for new commits
+      id: diffcheck
+      shell: bash
+      run: |
+        COUNT=$(git rev-list --count origin/mainphp7..HEAD)
+        echo "Commits ahead of origin/mainphp7: $COUNT"
+        echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+
+    - name: Push backport branch
+      if: steps.diffcheck.outputs.count != '0'
+      shell: bash
+      run: |
+        git remote set-url origin https://x-access-token:${{ inputs.token }}@github.com/${{ github.repository }}.git
+        git push origin "${{ steps.branch.outputs.branch }}" --force
+
+    - name: Create PR to mainphp7
+      id: create_pr
+      if: steps.diffcheck.outputs.count != '0'
+      uses: actions/github-script@v7
+      env:
+        BRANCH: ${{ steps.branch.outputs.branch }}
+        SOURCE_REF: ${{ inputs.source_ref }}
+        PR_TITLE: ${{ inputs.pr_title }}
+        FAILED_SHAS: ${{ steps.cherrypick.outputs.failed_shas }}
+        HAS_CONFLICTS: ${{ steps.cherrypick.outputs.has_conflicts }}
+        CONFLICT_FILES: ${{ steps.conflictfiles.outputs.files }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          // Values come in via env vars (not spliced into this script text)
+          // so arbitrary content — backticks, quotes, ${...} — can't break
+          // or inject into the JS source.
+          const branch = process.env.BRANCH;
+          const sourceRef = process.env.SOURCE_REF;
+          const prTitle = process.env.PR_TITLE;
+          const failed = (process.env.FAILED_SHAS || '').trim();
+          const hasConflicts = process.env.HAS_CONFLICTS === 'true';
+          const conflictFiles = (process.env.CONFLICT_FILES || '').trim();
+
+          let body = `Automated backport from ${sourceRef} into \`mainphp7\`.\n\n`;
+
+          if (hasConflicts) {
+            body += `⚠️ **Some commits had conflicts. They were committed with conflict markers left in place so they show up directly in this PR's diff:**\n`;
+            failed.split(' ').forEach(sha => {
+              if (sha) body += `- ${sha}\n`;
+            });
+
+            if (conflictFiles) {
+              body += `\n**Files still containing conflict markers (\`<<<<<<<\`):**\n`;
+              conflictFiles.split('\n').forEach(f => {
+                if (f) body += `- \`${f.replace(/^\.\//, '')}\`\n`;
+              });
+            }
+
+            body += `\nPlease pull branch \`${branch}\`, resolve the conflict markers manually, commit, and push before merging. This PR is opened as a draft to prevent accidental merge.`;
+          } else {
+            body += `All commits were cherry-picked successfully with no conflicts.`;
+          }
+
+          const newPr = await github.rest.pulls.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: `[Backport] ${prTitle} -> mainphp7`,
+            head: branch,
+            base: 'mainphp7',
+            body: body,
+            draft: hasConflicts,
+          });
+
+          core.setOutput('pr_url', newPr.data.html_url);
+          core.setOutput('pr_number_new', newPr.data.number);
+
+    - name: Report back
+      uses: actions/github-script@v7
+      env:
+        PR_NUMBER: ${{ inputs.pr_number }}
+        BACKPORT_PR_URL: ${{ steps.create_pr.outputs.pr_url }}
+        BRANCH: ${{ steps.branch.outputs.branch }}
+        HAS_CONFLICTS: ${{ steps.cherrypick.outputs.has_conflicts }}
+        NEW_COMMIT_COUNT: ${{ steps.diffcheck.outputs.count }}
+        FAILED_SHAS: ${{ steps.cherrypick.outputs.failed_shas }}
+        ALL_SHAS: ${{ inputs.shas }}
+      with:
+        github-token: ${{ inputs.token }}
+        script: |
+          // Values come in via env vars (not spliced into this script text)
+          // so arbitrary content — backticks, quotes, ${...} — can't break
+          // or inject into the JS source.
+          const prNumber = (process.env.PR_NUMBER || '').trim();
+          const backportPrUrl = process.env.BACKPORT_PR_URL || '';
+          const branch = process.env.BRANCH;
+          const hasConflicts = process.env.HAS_CONFLICTS === 'true';
+          const noNewCommits = process.env.NEW_COMMIT_COUNT === '0';
+          const failed = (process.env.FAILED_SHAS || '').trim();
+          const allShas = (process.env.ALL_SHAS || '').trim().split(' ').filter(Boolean);
+          const lastSha = allShas[allShas.length - 1];
+
+          let message;
+          if (noNewCommits) {
+            message = `❌ Backport to \`mainphp7\` failed: no new commits ended up on the backport branch (nothing to cherry-pick, or everything was already present). No branch was pushed and no PR was opened.`;
+          } else if (hasConflicts) {
+            message = `⚠️ Backport PR created for \`mainphp7\`, but some commits had conflicts. Conflict markers were left in place directly in the PR diff for manual resolution: ${backportPrUrl}\n\nBranch: \`${branch}\`\nConflicting commits:${failed}`;
+          } else {
+            message = `✅ Backport PR created for \`mainphp7\`: ${backportPrUrl}`;
+          }
+
+          if (prNumber) {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: parseInt(prNumber, 10),
+              body: message,
+            });
+          } else if (lastSha) {
+            await github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: lastSha,
+              body: message,
+            });
+          }
