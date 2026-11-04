@@ -1,5 +1,5 @@
 <?php
-
+// QA only: SELECT * FROM otp_test WHERE id = '{$unsafe_id}'
 if (! defined('ABSPATH')) {
 	exit; // Exit if accessed directly
 }
