@@ -2,12 +2,6 @@ name: OTP SQL safety
 
 on:
   pull_request:
-    paths:
-      - '.github/workflows/otp-sql-safety.yml'
-      - 'inc/gateways/**'
-      - 'inc/class-otpa-logger.php'
-      - 'inc/templates/admin/logs-settings-page.php'
-      - 'tests/otp-sql-safety.php'
   push:
     paths:
       - '.github/workflows/otp-sql-safety.yml'
